@@ -1,0 +1,27 @@
+name: Python package
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install ultralytics
+      - name: Run build file
+        run: yolo train model=yolov8n.pt data=coco128.yaml epochs=3 imgsz=640 batch=16 workers=2 device=0 name=yolo_test
+      - name: Upload model
+        uses: actions/upload-artifact@v4
+        with:
+            name: trained-model
+            path: runs/detect/train/*/weights/best.pt
