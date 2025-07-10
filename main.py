@@ -1,8 +1,8 @@
 import tensorflow as tf # The main thing handling all the ai stuff
-import keras
-import numpy as np # NumPy is used for some array manipulations and conversions.
-from os.path import exists
-from datasets import load_dataset
+import keras # keras does... something idk magic ig
+import numpy as np # numpy is used for some array manipulations and conversions.
+from os.path import exists # to see if a file exists i really dont need this comment
+from datasets import load_dataset # to load the dataset from huggingface
 
 try:
     if tf.config.experimental.list_physical_devices("GPU"):
@@ -34,6 +34,7 @@ def build_model(vocab_list):
     return model
 
 def generate_text(model, prompt, char2idx, idx2char, temperature=0.4, top_k=10, n_chars=400):
+    """Generates text using the AI model."""
     PAD_ID = char2idx['\0']
     vocab_size = len(idx2char)
     k = min(top_k, vocab_size)
@@ -62,7 +63,7 @@ def generate_text(model, prompt, char2idx, idx2char, temperature=0.4, top_k=10, 
     return prompt + generated
 
 def main():
-    """Main function to train the AI model. running coming soon™. """
+    """Main function to train the AI model"""
 
     full_text = ""
     vocab_list = []
@@ -108,7 +109,7 @@ def main():
         .prefetch(tf.data.AUTOTUNE)
     )
 
-    validation_dataset = tf.data.Dataset.from_tensor_slices(val_encoded) # no error which is really suprizing but how do you get this?
+    validation_dataset = tf.data.Dataset.from_tensor_slices(val_encoded)
     validation_windowed_dataset = validation_dataset.batch(SEQ_LENGTH + 1, drop_remainder=True)
     val_ds = (
         validation_windowed_dataset.map(lambda x: (x[:-1], x[1:]))
