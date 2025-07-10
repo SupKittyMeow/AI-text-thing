@@ -1,10 +1,8 @@
-"""This module does all the ai stuff"""
 import tensorflow as tf # The main thing handling all the ai stuff
 import keras
-import tensorflow_datasets as tfds # The dataset which I'll be using is provided in this,
-                                    # along with many others.
 import numpy as np # NumPy is used for some array manipulations and conversions.
 from os.path import exists
+from datasets import load_dataset
 
 try:
     if tf.config.experimental.list_physical_devices("GPU"):
@@ -21,14 +19,15 @@ SEQ_LENGTH = 100
 BATCH_SIZE = 140
 BUFFER_SIZE = 10000
 vocab_set = set()
-ds = tfds.load("tiny_shakespeare", split="train", with_info=False)
+ds = load_dataset("kmfoda/booksum", "default", split="train")
+
 print("Dataset loaded!")
 
 def build_model(vocab_list):
     """Builds the AI model using the provided vocabulary list."""
     inputs = keras.layers.Input(shape=(SEQ_LENGTH,))
     x = keras.layers.Embedding(input_dim=len(vocab_list), output_dim=256)(inputs)
-    x = keras.layers.LSTM(256, return_sequences=True)(x)
+    x = keras.layers.LSTM(512, return_sequences=True)(x)
     x = keras.layers.Dropout(0.1)(x)
     outputs = keras.layers.Dense(len(vocab_list))(x)
     model = keras.models.Model(inputs, outputs)
@@ -73,10 +72,12 @@ def main():
             vocab_list = sorted(set(letter for letter in full_text))
             print("Vocabulary list already exists. Skipping vocabulary generation.")
     else:
-        for ex in ds.as_numpy_iterator():  # type: ignore
-            text_str = ex["text"].decode("utf-8")
-            vocab_set.update(letter for letter in text_str)
-            full_text += text_str
+        for ex in ds:
+            text = ex.get("content") or ex.get("chapter") #type: ignore
+            if text is None:
+                continue
+            vocab_set.update(letter for letter in text)
+            full_text += text
 
         vocab_list = sorted(vocab_set)
         with open("vocab_set.txt", "w") as f:
@@ -124,7 +125,7 @@ def main():
             try:
                 model.load_weights("model_checkpoint.weights.h5")  # Load weights if they exist
             except Exception as e:
-                print("could not load weights:", e)  # If the file doesn't exist, create
+                print("Could not load weights:", e)  # If the file doesn't exist, create
             print("What is your prompt? (note, it continues the prompt; it doesnt respond to the question)")
             input_prompt = input()
             allowed = set(char2idx)

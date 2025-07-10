@@ -1,5 +1,4 @@
-model_checkpoint.weights.h5
 logs/*
 .DS_Store
-vocab_set.txt
 .venv/*
+vocab_set.txt
