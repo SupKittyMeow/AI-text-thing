@@ -6,10 +6,19 @@ import tensorflow_datasets as tfds # The dataset which I'll be using is provided
 import numpy as np # NumPy is used for some array manipulations and conversions.
 from os.path import exists
 
+try:
+    if tf.config.experimental.list_physical_devices("GPU"):
+        tf.config.set_visible_devices(tf.config.experimental.list_physical_devices("GPU")[0], "GPU")
+        print("✅ GPU device found and configured for the GPU. yay")
+    else:
+        print("❌ GPU device not found sad oof aaaaaaaaaa, training will use the CPU.")
+except Exception as e:
+    print(f"An error occurred during MPS configuration: {e}")
+
 keras.mixed_precision.set_global_policy('mixed_float16')
 
 SEQ_LENGTH = 100
-BATCH_SIZE = 64
+BATCH_SIZE = 140
 BUFFER_SIZE = 10000
 vocab_set = set()
 ds = tfds.load("tiny_shakespeare", split="train", with_info=False)
@@ -19,7 +28,7 @@ def build_model(vocab_list):
     """Builds the AI model using the provided vocabulary list."""
     inputs = keras.layers.Input(shape=(SEQ_LENGTH,))
     x = keras.layers.Embedding(input_dim=len(vocab_list), output_dim=256)(inputs)
-    x = keras.layers.LSTM(1024, return_sequences=True)(x)
+    x = keras.layers.LSTM(256, return_sequences=True)(x)
     x = keras.layers.Dropout(0.1)(x)
     outputs = keras.layers.Dense(len(vocab_list))(x)
     model = keras.models.Model(inputs, outputs)
@@ -119,6 +128,7 @@ def main():
             print("What is your prompt? (note, it continues the prompt; it doesnt respond to the question)")
             input_prompt = input()
             allowed = set(char2idx)
+            print('Generating text...')
             print(generate_text(model, "".join(c for c in input_prompt if c in allowed), char2idx=char2idx, idx2char=idx2char))
         elif choice == 't':
             try:
@@ -137,9 +147,9 @@ def main():
                     ),
                     keras.callbacks.EarlyStopping(patience=10, restore_best_weights=True),
                     keras.callbacks.TensorBoard(log_dir="logs"),
-                    keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, verbose=1)
+                    keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.8, patience=1, verbose=1),
                 ],
-                epochs=40
+                epochs=500
             )
 
         
