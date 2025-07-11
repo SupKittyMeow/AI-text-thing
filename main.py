@@ -3,6 +3,18 @@ import keras # keras does... something idk magic ig
 import numpy as np # numpy is used for some array manipulations and conversions.
 from os.path import exists # to see if a file exists i really dont need this comment
 from datasets import load_dataset # to load the dataset from huggingface
+import sentencepiece as spm # type: ignore | tokenizer 
+
+if (not exists('booksum_sp.model')):
+    spm.SentencePieceTrainer.train(
+        input='vocab_set.txt',
+        model_prefix='booksum_sp',
+        vocab_size=16000,
+        model_type='bpe',
+        character_coverage=1.0
+    )
+
+sp = spm.SentencePieceProcessor(model_file='booksum_sp.model')
 
 try:
     if tf.config.experimental.list_physical_devices("GPU"):
@@ -13,9 +25,9 @@ try:
 except Exception as e:
     print(f"An error occurred during MPS configuration: {e}")
 
-keras.mixed_precision.set_global_policy('mixed_float16')
+# keras.mixed_precision.set_global_policy('mixed_float16')
 
-SEQ_LENGTH = 100
+SEQ_LENGTH = 256
 BATCH_SIZE = 140
 BUFFER_SIZE = 10000
 vocab_set = set()
@@ -23,77 +35,42 @@ ds = load_dataset("kmfoda/booksum", "default", split="train")
 
 print("Dataset loaded!")
 
-def build_model(vocab_list):
+def build_model(vocab_size, logits, x, inputs):
     """Builds the AI model using the provided vocabulary list."""
-    inputs = keras.layers.Input(shape=(SEQ_LENGTH,))
-    x = keras.layers.Embedding(input_dim=len(vocab_list), output_dim=256)(inputs)
-    x = keras.layers.LSTM(512, return_sequences=True)(x)
-    x = keras.layers.Dropout(0.1)(x)
-    outputs = keras.layers.Dense(len(vocab_list))(x)
-    model = keras.models.Model(inputs, outputs)
+    x = keras.layers.Dropout(0.2)(x)
+    outputs = keras.layers.Dense(vocab_size)(x)
+    model = keras.models.Model(inputs, logits)
     return model
 
-def generate_text(model, prompt, char2idx, idx2char, temperature=0.4, top_k=10, n_chars=400):
+def generate_text(model, prompt, max_len=200, temperature=0.4, top_k=10):
     """Generates text using the AI model."""
-    PAD_ID = char2idx['\0']
-    vocab_size = len(idx2char)
-    k = min(top_k, vocab_size)
-    encoded_prompt = np.array([char2idx[c] for c in prompt], dtype=np.int32)
-    tokens = list(encoded_prompt)
-
-    for _ in range(n_chars):
-        if len(tokens) > 100:
-            context_tokens = tokens[-SEQ_LENGTH:]
-        elif len(tokens) < 100: # left pad
-            context_tokens = [PAD_ID] * (SEQ_LENGTH-len(tokens)) + tokens
-        else: 
-            context_tokens = tokens
-        context = np.array(context_tokens, dtype=int)[None, :]
-
-        logits = model.predict(context, verbose=0)[0, -1]
-        logits /= temperature
-        top_k_indicies = np.argpartition(logits, -k)[-k:]
-        mask = np.full_like(logits, -np.inf)
-        mask[top_k_indicies] = logits[top_k_indicies]
-        probs = tf.nn.softmax(mask).numpy() # type: ignore
-        next_token = np.random.choice(vocab_size, p=probs)
-        tokens.append(next_token)
-
-    generated = ''.join(idx2char[t] for t in tokens[len(encoded_prompt):])
-    return prompt + generated
+    ids = [] for sample in ds:
+    for _ in range(max_len):
+        window = ids[-SEQ_LENGTH:]
+        window = [sp.pad_id()] * (SEQ_LENGTH-len(window)) + window
+        logit = model.predict(tf.constant([window]))[0, -1] / temperature
+        top = np.argpartition(logit, -top_k)[-top_k:]
+        probs = tf.nn.softmax(tf.where(np.isin(range(len(logit)), top), logit, -1e9))
+        ids.append(np.random.choice(len(logit), p=probs.numpy()))
+    return sp.decode(ids)
 
 def main():
     """Main function to train the AI model"""
 
-    full_text = ""
-    vocab_list = []
-    if exists("vocab_set.txt"):
-        with open("vocab_set.txt", "r") as f:
-            full_text = f.read()
-            vocab_list = sorted(set(letter for letter in full_text))
-            print("Vocabulary list already exists. Skipping vocabulary generation.")
-    else:
-        for ex in ds:
-            text = ex.get("content") or ex.get("chapter") #type: ignore
-            if text is None:
-                continue
-            vocab_set.update(letter for letter in text)
-            full_text += text
-
-        vocab_list = sorted(vocab_set)
-        with open("vocab_set.txt", "w") as f:
-            f.write(full_text)
-            print("Vocabulary list generated and saved to vocab_set.txt.")
+    full_text = (sp.encode(ds['text'], out_type=str))
+    vocab_list = sp.encode() # todo
 
     if '\0' not in vocab_list:
         vocab_list.append('\0')
-        
-    char2idx = {c: i for i, c in enumerate(vocab_list)}
-    idx2char = np.array(vocab_list)
 
     print(len(full_text), "characters in the dataset.")
 
-    encoded = np.array([char2idx[c] for c in full_text], dtype=np.int32)
+    vocab_size = sp.vocab_size()
+    inputs = keras.layers.Input((SEQ_LENGTH,))
+    x = keras.layers.Embedding(vocab_size, 512)(inputs)
+    x = keras.layers.LSTM(1024, return_sequences=True)(x)
+
+    encoded = np.array([sp.encode(text, out_type=int)[c] for c in full_text], dtype=np.int32)
 
     split_idx = round(0.9 * len(encoded))
     train_encoded = encoded[:split_idx]
@@ -117,39 +94,58 @@ def main():
         .prefetch(tf.data.AUTOTUNE)
     )
 
-    model = build_model(vocab_list)
-    model.compile(optimizer='adam', loss="sparse_categorical_crossentropy")
+    logits = keras.layers.Dense(vocab)(x)
+
+    model = build_model(vocab_size, logits, x, inputs)
+    model.compile(optimizer=keras.optimizers.Adam(1e-3, clipnorm=1.0), loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True), metrics=[keras.metrics.SparseCategoricalAccuracy()]) # type: ignore
     while True:
         print("Generate or train? (g/t)")
         choice = input().strip().lower()
         if choice == 'g':
             try:
-                model.load_weights("model_checkpoint.weights.h5")  # Load weights if they exist
+                model.load_weights("best_loss.weights.h5")  # Load weights if they exist
             except Exception as e:
                 print("Could not load weights:", e)  # If the file doesn't exist, create
             print("What is your prompt? (note, it continues the prompt; it doesnt respond to the question)")
             input_prompt = input()
-            allowed = set(char2idx)
+            allowed = set(sp.encode(text, out_type=int))
             print('Generating text...')
-            print(generate_text(model, "".join(c for c in input_prompt if c in allowed), char2idx=char2idx, idx2char=idx2char))
+            print(generate_text(model, "".join(c for c in input_prompt if c in allowed))) # type: ignore
         elif choice == 't':
             try:
-                model.load_weights("model_checkpoint.weights.h5")
+                model.load_weights("best_loss.weights.h5")
             except Exception as e:
                 pass
+
+            checkpoint = keras.callbacks.ModelCheckpoint(
+                "best_loss.weights.h5",
+                monitor="val_loss",
+                mode="min",
+                save_best_only=True,
+                save_weights_only=True
+            )
+
+            reduce_lr = keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss",
+                factor=0.5,
+                patience=3,
+                verbose=1
+            )
+
+            model.fit(train_ds.take(1000), validation_data=val_ds,
+                callbacks=[
+                    checkpoint,
+                    keras.callbacks.EarlyStopping(patience=10, restore_best_weights=True),
+                    reduce_lr
+            ], epochs=1)
+            
             model.fit(
                 train_ds,
                 validation_data=val_ds,
                 callbacks=[
-                    keras.callbacks.ModelCheckpoint(
-                        save_weights_only=True,
-                        monitor="val_loss",
-                        mode="min",
-                        filepath="model_checkpoint.weights.h5"
-                    ),
+                    checkpoint,
                     keras.callbacks.EarlyStopping(patience=10, restore_best_weights=True),
-                    keras.callbacks.TensorBoard(log_dir="logs"),
-                    keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.8, patience=1, verbose=1),
+                    reduce_lr
                 ],
                 epochs=500
             )
